@@ -1,0 +1,16 @@
+{
+  "rings": {
+    "go2java": {
+      "backend": "posix_shm",
+      "shmName": "/go2java_shm",
+      "capacity": 1024,
+      "maxObjectSize": 1028
+    },
+    "java2go": {
+      "backend": "posix_shm",
+      "shmName": "/java2go_shm",
+      "capacity": 1024,
+      "maxObjectSize": 1028
+    }
+  }
+}
