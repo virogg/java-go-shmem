@@ -1,4 +1,4 @@
-package ring
+package producer
 
 import (
 	"path/filepath"
@@ -7,6 +7,7 @@ import (
 
 	ipcatomic "github.com/viroge/go-shmem/pkg/atomic"
 	"github.com/viroge/go-shmem/pkg/memory"
+	"github.com/viroge/go-shmem/pkg/ring"
 
 	"github.com/stretchr/testify/require"
 )
@@ -15,20 +16,20 @@ func TestNewProducerValidation(t *testing.T) {
 	t.Parallel()
 
 	t.Run("invalid capacity", func(t *testing.T) {
-		_, err := NewProducer(filepath.Join(t.TempDir(), "test.mmap"), 0, 64)
+		_, err := New(filepath.Join(t.TempDir(), "test.mmap"), 0, 64)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "invalid capacity")
 
-		_, err = NewProducer(filepath.Join(t.TempDir(), "test.mmap"), -1, 64)
+		_, err = New(filepath.Join(t.TempDir(), "test.mmap"), -1, 64)
 		require.Error(t, err)
 	})
 
 	t.Run("invalid maxObjectSize", func(t *testing.T) {
-		_, err := NewProducer(filepath.Join(t.TempDir(), "test.mmap"), 16, 0)
+		_, err := New(filepath.Join(t.TempDir(), "test.mmap"), 16, 0)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "invalid maxObjectSize")
 
-		_, err = NewProducer(filepath.Join(t.TempDir(), "test.mmap"), 16, -1)
+		_, err = New(filepath.Join(t.TempDir(), "test.mmap"), 16, -1)
 		require.Error(t, err)
 	})
 }
@@ -37,7 +38,7 @@ func TestNewProducerWithRegionValidation(t *testing.T) {
 	t.Parallel()
 
 	t.Run("nil region", func(t *testing.T) {
-		_, err := NewProducerWithRegion(nil, "test", 16, 64)
+		_, err := NewWithRegion(nil, "test", 16, 64)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "nil region")
 	})
@@ -47,7 +48,7 @@ func TestProducerBasicOps(t *testing.T) {
 	t.Parallel()
 
 	filename := filepath.Join(t.TempDir(), "producer.mmap")
-	p, err := NewProducer(filename, 16, 64)
+	p, err := New(filename, 16, 64)
 	require.NoError(t, err)
 	defer func() { _ = p.Close(true) }()
 
@@ -59,7 +60,7 @@ func TestProducerNextToDispatch(t *testing.T) {
 	t.Parallel()
 
 	filename := filepath.Join(t.TempDir(), "producer.mmap")
-	p, err := NewProducer(filename, 4, 64)
+	p, err := New(filename, 4, 64)
 	require.NoError(t, err)
 	defer func() { _ = p.Close(true) }()
 
@@ -71,33 +72,33 @@ func TestProducerNextToDispatch(t *testing.T) {
 	}
 
 	_, err = p.NextToDispatch()
-	require.ErrorIs(t, err, ErrRingFull)
+	require.ErrorIs(t, err, ring.ErrRingFull)
 }
 
 func TestProducerFlush(t *testing.T) {
 	t.Parallel()
 
 	filename := filepath.Join(t.TempDir(), "producer.mmap")
-	region, err := memory.OpenOrCreateMmap(filename, HeaderSize+4*64)
+	region, err := memory.OpenOrCreateMmap(filename, ring.HeaderSize+4*64)
 	require.NoError(t, err)
 
-	p, err := NewProducerWithRegion(region, filename, 4, 64)
+	p, err := NewWithRegion(region, filename, 4, 64)
 	require.NoError(t, err)
 	defer func() { _ = p.Close(true) }()
 
 	base := uintptr(unsafe.Pointer(&region.Bytes()[0]))
 
-	seq := ipcatomic.LoadVolatileLong(base + ProducerSeqOffset)
+	seq := ipcatomic.LoadVolatileLong(base + ring.ProducerSeqOffset)
 	require.Equal(t, uint64(0), seq)
 
 	_, _ = p.NextToDispatch()
 	_, _ = p.NextToDispatch()
 
-	seq = ipcatomic.LoadVolatileLong(base + ProducerSeqOffset)
+	seq = ipcatomic.LoadVolatileLong(base + ring.ProducerSeqOffset)
 	require.Equal(t, uint64(0), seq)
 
 	p.Flush()
-	seq = ipcatomic.LoadVolatileLong(base + ProducerSeqOffset)
+	seq = ipcatomic.LoadVolatileLong(base + ring.ProducerSeqOffset)
 	require.Equal(t, uint64(2), seq)
 }
 
@@ -106,7 +107,7 @@ func TestProducerIndexCalc(t *testing.T) {
 
 	t.Run("power of two", func(t *testing.T) {
 		filename := filepath.Join(t.TempDir(), "prod_pow2.mmap")
-		p, err := NewProducer(filename, 8, 64)
+		p, err := New(filename, 8, 64)
 		require.NoError(t, err)
 		defer func() { _ = p.Close(true) }()
 
@@ -120,7 +121,7 @@ func TestProducerIndexCalc(t *testing.T) {
 
 	t.Run("non power of two", func(t *testing.T) {
 		filename := filepath.Join(t.TempDir(), "prod_nonpow2.mmap")
-		p, err := NewProducer(filename, 5, 64)
+		p, err := New(filename, 5, 64)
 		require.NoError(t, err)
 		defer func() { _ = p.Close(true) }()
 
@@ -136,10 +137,10 @@ func TestProducerRingFullThenConsume(t *testing.T) {
 	t.Parallel()
 
 	filename := filepath.Join(t.TempDir(), "full.mmap")
-	region, err := memory.OpenOrCreateMmap(filename, HeaderSize+4*64)
+	region, err := memory.OpenOrCreateMmap(filename, ring.HeaderSize+4*64)
 	require.NoError(t, err)
 
-	p, err := NewProducerWithRegion(region, filename, 4, 64)
+	p, err := NewWithRegion(region, filename, 4, 64)
 	require.NoError(t, err)
 	defer func() { _ = p.Close(true) }()
 
@@ -152,9 +153,9 @@ func TestProducerRingFullThenConsume(t *testing.T) {
 	p.Flush()
 
 	_, err = p.NextToDispatch()
-	require.ErrorIs(t, err, ErrRingFull)
+	require.ErrorIs(t, err, ring.ErrRingFull)
 
-	ipcatomic.StoreVolatileLong(base+ConsumerSeqOffset, 2)
+	ipcatomic.StoreVolatileLong(base+ring.ConsumerSeqOffset, 2)
 
 	_, err = p.NextToDispatch()
 	require.NoError(t, err)
@@ -162,5 +163,5 @@ func TestProducerRingFullThenConsume(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = p.NextToDispatch()
-	require.ErrorIs(t, err, ErrRingFull)
+	require.ErrorIs(t, err, ring.ErrRingFull)
 }

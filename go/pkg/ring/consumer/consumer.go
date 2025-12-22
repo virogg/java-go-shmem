@@ -1,16 +1,15 @@
-package ring
+package consumer
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"unsafe"
 
 	ipcatomic "github.com/viroge/go-shmem/pkg/atomic"
+	"github.com/viroge/go-shmem/pkg/config"
 	"github.com/viroge/go-shmem/pkg/memory"
+	"github.com/viroge/go-shmem/pkg/ring"
 )
-
-var ErrNoData = errors.New("no data")
 
 type Consumer struct {
 	backend memory.Region
@@ -28,7 +27,7 @@ type Consumer struct {
 	fetchCount     uint64
 }
 
-func NewConsumer(filename string, capacity int, maxObjectSize int) (*Consumer, error) {
+func New(filename string, capacity int, maxObjectSize int) (*Consumer, error) {
 	if maxObjectSize <= 0 {
 		return nil, fmt.Errorf("invalid maxObjectSize: %d", maxObjectSize)
 	}
@@ -46,10 +45,10 @@ func NewConsumer(filename string, capacity int, maxObjectSize int) (*Consumer, e
 			return nil, fmt.Errorf("cannot infer capacity from empty file: %s", filename)
 		}
 		totalSize = int(st.Size())
-		if totalSize < HeaderSize {
+		if totalSize < ring.HeaderSize {
 			return nil, fmt.Errorf("file too small for header: %d", totalSize)
 		}
-		capacity = (totalSize - HeaderSize) / maxObjectSize
+		capacity = (totalSize - ring.HeaderSize) / maxObjectSize
 		if capacity <= 0 {
 			return nil, fmt.Errorf("inferred invalid capacity: %d", capacity)
 		}
@@ -57,7 +56,7 @@ func NewConsumer(filename string, capacity int, maxObjectSize int) (*Consumer, e
 		if capacity <= 0 {
 			return nil, fmt.Errorf("invalid capacity: %d", capacity)
 		}
-		totalSize = HeaderSize + capacity*maxObjectSize
+		totalSize = ring.HeaderSize + capacity*maxObjectSize
 	}
 
 	backend, err := memory.OpenOrCreateMmap(filename, totalSize)
@@ -65,10 +64,10 @@ func NewConsumer(filename string, capacity int, maxObjectSize int) (*Consumer, e
 		return nil, err
 	}
 
-	return NewConsumerWithRegion(backend, filename, capacity, maxObjectSize)
+	return NewWithRegion(backend, filename, capacity, maxObjectSize)
 }
 
-func NewConsumerWithRegion(region memory.Region, name string, capacity int, maxObjectSize int) (*Consumer, error) {
+func NewWithRegion(region memory.Region, name string, capacity int, maxObjectSize int) (*Consumer, error) {
 	if region == nil {
 		return nil, fmt.Errorf("nil region")
 	}
@@ -89,9 +88,28 @@ func NewConsumerWithRegion(region memory.Region, name string, capacity int, maxO
 		capMinusOne:   uint64(capacity - 1),
 	}
 
-	c.lastFetchedSeq = ipcatomic.LoadVolatileLong(base + ConsumerSeqOffset)
+	c.lastFetchedSeq = ipcatomic.LoadVolatileLong(base + ring.ConsumerSeqOffset)
 
 	return c, nil
+}
+
+func Open(r config.Ring) (*Consumer, error) {
+	backend := r.Backend
+	if backend == "" {
+		backend = memory.BackendMmap
+	}
+	name, err := ring.Name(r)
+	if err != nil {
+		return nil, err
+	}
+
+	totalSize := ring.HeaderSize + r.Capacity*r.MaxObjectSize
+	region, err := memory.OpenRegion(backend, name, totalSize)
+	if err != nil {
+		return nil, err
+	}
+
+	return NewWithRegion(region, name, r.Capacity, r.MaxObjectSize)
 }
 
 func (c *Consumer) Capacity() int {
@@ -103,7 +121,7 @@ func (c *Consumer) LastFetchedSequence() uint64 {
 }
 
 func (c *Consumer) LastOfferedSequence() uint64 {
-	return ipcatomic.LoadVolatileLong(c.base + ProducerSeqOffset)
+	return ipcatomic.LoadVolatileLong(c.base + ring.ProducerSeqOffset)
 }
 
 func (c *Consumer) AvailableToFetch() int64 {
@@ -135,7 +153,7 @@ func (c *Consumer) RollBackN(count uint64) {
 }
 
 func (c *Consumer) DoneFetching() {
-	ipcatomic.StoreVolatileLong(c.base+ConsumerSeqOffset, c.lastFetchedSeq)
+	ipcatomic.StoreVolatileLong(c.base+ring.ConsumerSeqOffset, c.lastFetchedSeq)
 	c.fetchCount = 0
 }
 
@@ -159,25 +177,25 @@ func (c *Consumer) Close(deleteFile bool) error {
 
 func (c *Consumer) fetchTrue() (uintptr, error) {
 	if c.AvailableToFetch() <= 0 {
-		return 0, ErrNoData
+		return 0, ring.ErrNoData
 	}
 
 	c.fetchCount++
 	c.lastFetchedSeq++
 
 	index := c.calcIndex(c.lastFetchedSeq)
-	addr := c.base + HeaderSize + uintptr(index)*uintptr(c.maxObjectSize)
+	addr := c.base + ring.HeaderSize + uintptr(index)*uintptr(c.maxObjectSize)
 	return addr, nil
 }
 
 func (c *Consumer) fetchFalse() (uintptr, error) {
 	if c.AvailableToFetch() <= 0 {
-		return 0, ErrNoData
+		return 0, ring.ErrNoData
 	}
 
 	next := c.lastFetchedSeq + 1
 	index := c.calcIndex(next)
-	addr := c.base + HeaderSize + uintptr(index)*uintptr(c.maxObjectSize)
+	addr := c.base + ring.HeaderSize + uintptr(index)*uintptr(c.maxObjectSize)
 	return addr, nil
 }
 

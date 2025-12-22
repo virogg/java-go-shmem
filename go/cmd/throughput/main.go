@@ -7,9 +7,10 @@ import (
 	"time"
 
 	"github.com/viroge/go-shmem/pkg/config"
-	"github.com/viroge/go-shmem/pkg/memory"
 	"github.com/viroge/go-shmem/pkg/message"
 	"github.com/viroge/go-shmem/pkg/ring"
+	"github.com/viroge/go-shmem/pkg/ring/consumer"
+	"github.com/viroge/go-shmem/pkg/ring/producer"
 )
 
 func main() {
@@ -25,17 +26,17 @@ func main() {
 	}
 
 	if *reset {
-		resetRing(cfg.Rings.Go2Java)
-		resetRing(cfg.Rings.Java2Go)
+		ring.Reset(cfg.Rings.Go2Java)
+		ring.Reset(cfg.Rings.Java2Go)
 	}
 
-	producer, err := openProducer(cfg.Rings.Go2Java)
+	producer, err := producer.Open(cfg.Rings.Go2Java)
 	if err != nil {
 		log.Fatalf("producer: %v", err)
 	}
 	defer producer.Close(false)
 
-	consumer, err := openConsumer(cfg.Rings.Java2Go)
+	consumer, err := consumer.Open(cfg.Rings.Java2Go)
 	if err != nil {
 		log.Fatalf("consumer: %v", err)
 	}
@@ -92,50 +93,4 @@ func main() {
 	fmt.Printf("Time:       %v\n", elapsed)
 	fmt.Printf("Throughput: %.0f msg/s\n", throughput)
 	fmt.Printf("Latency:    %.2f µs/msg\n", float64(elapsed.Microseconds())/float64(*n))
-}
-
-func openProducer(r config.Ring) (*ring.Producer, error) {
-	backend := r.Backend
-	if backend == "" {
-		backend = memory.BackendMmap
-	}
-	name := r.Filename
-	if backend == memory.BackendPosixShm {
-		name = r.ShmName
-	}
-	totalSize := ring.HeaderSize + r.Capacity*r.MaxObjectSize
-	region, err := memory.OpenRegion(backend, name, totalSize)
-	if err != nil {
-		return nil, err
-	}
-	return ring.NewProducerWithRegion(region, name, r.Capacity, r.MaxObjectSize)
-}
-
-func openConsumer(r config.Ring) (*ring.Consumer, error) {
-	backend := r.Backend
-	if backend == "" {
-		backend = memory.BackendMmap
-	}
-	name := r.Filename
-	if backend == memory.BackendPosixShm {
-		name = r.ShmName
-	}
-	totalSize := ring.HeaderSize + r.Capacity*r.MaxObjectSize
-	region, err := memory.OpenRegion(backend, name, totalSize)
-	if err != nil {
-		return nil, err
-	}
-	return ring.NewConsumerWithRegion(region, name, r.Capacity, r.MaxObjectSize)
-}
-
-func resetRing(r config.Ring) {
-	backend := r.Backend
-	if backend == "" {
-		backend = memory.BackendMmap
-	}
-	name := r.Filename
-	if backend == memory.BackendPosixShm {
-		name = r.ShmName
-	}
-	memory.DeleteRegion(backend, name)
 }
