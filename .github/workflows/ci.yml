@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 11
+
+      - name: Go tests (mmap)
+        working-directory: go
+        run: go test ./...
+
+      - name: Go tests (posix shm)
+        working-directory: go
+        env:
+          CGO_ENABLED: 1
+        run: go test -tags posixshm ./...
+
+      - name: Build native library (POSIX shm)
+        working-directory: native
+        run: make
+
+      - name: Maven tests
+        working-directory: java
+        run: mvn -B test
+
+  integration-scripts:
+    name: Integration scripts on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 11
+
+      - name: Build native library (POSIX shm)
+        working-directory: native
+        run: make
+
+      - name: Run mmap integration script
+        run: ./scripts/run_integration_test.sh 1000
+
+      - name: Run POSIX shm integration script
+        env:
+          CGO_ENABLED: 1
+        run: ./scripts/run_integration_test_posix.sh 1000
+
+  benchmarks:
+    name: Bench scripts on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 11
+
+      - name: Build native library (POSIX shm)
+        working-directory: native
+        run: make
+
+      - name: Benchmark latency (mmap)
+        run: ./scripts/run_latency_test.sh 5000 500
+
+      - name: Benchmark throughput (mmap)
+        run: ./scripts/run_throughput_test.sh 100000 50
+
+      - name: Benchmark latency (POSIX shm)
+        env:
+          CGO_ENABLED: 1
+        run: ./scripts/run_latency_test_posix.sh 5000 500
+
+      - name: Benchmark throughput (POSIX shm)
+        env:
+          CGO_ENABLED: 1
+        run: ./scripts/run_throughput_test_posix.sh 100000 50
