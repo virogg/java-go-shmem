@@ -1,0 +1,14 @@
+{
+  "rings": {
+    "go2java": {
+      "filename": "/tmp/go2java.mmap",
+      "capacity": 1024,
+      "maxObjectSize": 1028
+    },
+    "java2go": {
+      "filename": "/tmp/java2go.mmap",
+      "capacity": 1024,
+      "maxObjectSize": 1028
+    }
+  }
+}
