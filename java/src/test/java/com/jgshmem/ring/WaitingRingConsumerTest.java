@@ -10,21 +10,27 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import com.jgshmem.message.NumberMessage;
+import com.jgshmem.message.PayloadMessage;
 import com.jgshmem.utils.Builder;
 
 class WaitingRingConsumerTest {
     @TempDir
     Path tempDir;
 
+    private static final int CAPACITY = 16;
+    private static final int MAX_PAYLOAD_SIZE = 32;
+    private static final int MAX_OBJECT_SIZE = PayloadMessage.getMaxSize(MAX_PAYLOAD_SIZE);
+
     private String filename;
-    private WaitingRingProducer<NumberMessage> producer;
-    private WaitingRingConsumer<NumberMessage> consumer;
+    private Builder<PayloadMessage> builder;
+    private WaitingRingProducer<PayloadMessage> producer;
+    private WaitingRingConsumer<PayloadMessage> consumer;
 
     @BeforeEach
     void setUp() {
         filename = tempDir.resolve("consumer_test.mmap").toString();
-        producer = new WaitingRingProducer<>(16, NumberMessage.getMaxSize(), NumberMessage.class, filename);
+        builder = payloadBuilder();
+        producer = new WaitingRingProducer<>(CAPACITY, MAX_OBJECT_SIZE, builder, filename);
     }
 
     @AfterEach
@@ -41,9 +47,9 @@ class WaitingRingConsumerTest {
 
     @Test
     void testBasicConstruction() {
-        consumer = new WaitingRingConsumer<>(16, NumberMessage.getMaxSize(), NumberMessage.class, filename);
+        consumer = new WaitingRingConsumer<>(CAPACITY, MAX_OBJECT_SIZE, builder, filename);
 
-        assertEquals(16, consumer.getCapacity());
+        assertEquals(CAPACITY, consumer.getCapacity());
         assertEquals(0, consumer.getLastFetchedSequence());
         assertEquals(0, consumer.getLastOfferedSequence());
         assertNotNull(consumer.getMemory());
@@ -53,12 +59,13 @@ class WaitingRingConsumerTest {
     @Test
     void testDefaultCapacityConstructor() {
         String filename2 = tempDir.resolve("default.mmap").toString();
-        WaitingRingProducer<NumberMessage> p = new WaitingRingProducer<>(
-            WaitingRingProducer.DEFAULT_CAPACITY, NumberMessage.getMaxSize(), NumberMessage.class, filename2
+        Builder<PayloadMessage> localBuilder = payloadBuilder();
+        WaitingRingProducer<PayloadMessage> p = new WaitingRingProducer<>(
+            WaitingRingProducer.DEFAULT_CAPACITY, MAX_OBJECT_SIZE, localBuilder, filename2
         );
 
-        WaitingRingConsumer<NumberMessage> c = new WaitingRingConsumer<>(
-            NumberMessage.getMaxSize(), NumberMessage.class, filename2
+        WaitingRingConsumer<PayloadMessage> c = new WaitingRingConsumer<>(
+            MAX_OBJECT_SIZE, payloadBuilder(), filename2
         );
 
         assertEquals(WaitingRingProducer.DEFAULT_CAPACITY, c.getCapacity());
@@ -69,12 +76,12 @@ class WaitingRingConsumerTest {
 
     @Test
     void testAvailableToFetch() {
-        consumer = new WaitingRingConsumer<>(16, NumberMessage.getMaxSize(), NumberMessage.class, filename);
+        consumer = new WaitingRingConsumer<>(CAPACITY, MAX_OBJECT_SIZE, builder, filename);
         assertEquals(0, consumer.availableToFetch());
 
         for (int i = 0; i < 5; i++) {
-            NumberMessage msg = producer.nextToDispatch();
-            msg.value = i;
+            PayloadMessage msg = producer.nextToDispatch();
+            writeInt(msg, i);
         }
         producer.flush();
 
@@ -83,20 +90,20 @@ class WaitingRingConsumerTest {
 
     @Test
     void testFetchWithRemove() {
-        consumer = new WaitingRingConsumer<>(16, NumberMessage.getMaxSize(), NumberMessage.class, filename);
+        consumer = new WaitingRingConsumer<>(CAPACITY, MAX_OBJECT_SIZE, builder, filename);
 
         for (int i = 0; i < 3; i++) {
-            NumberMessage msg = producer.nextToDispatch();
-            msg.value = (i + 1) * 100;
+            PayloadMessage msg = producer.nextToDispatch();
+            writeInt(msg, (i + 1) * 100);
         }
         producer.flush();
 
-        NumberMessage m1 = consumer.fetch();
-        assertEquals(100, m1.value);
+        PayloadMessage m1 = consumer.fetch();
+        assertEquals(100, readInt(m1));
         assertEquals(1, consumer.getLastFetchedSequence());
 
-        NumberMessage m2 = consumer.fetch(true);
-        assertEquals(200, m2.value);
+        PayloadMessage m2 = consumer.fetch(true);
+        assertEquals(200, readInt(m2));
         assertEquals(2, consumer.getLastFetchedSequence());
 
         assertEquals(1, consumer.availableToFetch());
@@ -104,31 +111,31 @@ class WaitingRingConsumerTest {
 
     @Test
     void testFetchWithoutRemove() {
-        consumer = new WaitingRingConsumer<>(16, NumberMessage.getMaxSize(), NumberMessage.class, filename);
+        consumer = new WaitingRingConsumer<>(CAPACITY, MAX_OBJECT_SIZE, builder, filename);
 
-        NumberMessage msg = producer.nextToDispatch();
-        msg.value = 42;
+        PayloadMessage msg = producer.nextToDispatch();
+        writeInt(msg, 42);
         producer.flush();
 
-        NumberMessage m1 = consumer.fetch(false);
-        assertEquals(42, m1.value);
+        PayloadMessage m1 = consumer.fetch(false);
+        assertEquals(42, readInt(m1));
         assertEquals(0, consumer.getLastFetchedSequence());
 
-        NumberMessage m2 = consumer.fetch(false);
-        assertEquals(42, m2.value);
+        PayloadMessage m2 = consumer.fetch(false);
+        assertEquals(42, readInt(m2));
         assertEquals(0, consumer.getLastFetchedSequence());
 
-        NumberMessage m3 = consumer.fetch(true);
-        assertEquals(42, m3.value);
+        PayloadMessage m3 = consumer.fetch(true);
+        assertEquals(42, readInt(m3));
         assertEquals(1, consumer.getLastFetchedSequence());
     }
 
     @Test
     void testDoneFetching() {
-        consumer = new WaitingRingConsumer<>(16, NumberMessage.getMaxSize(), NumberMessage.class, filename);
+        consumer = new WaitingRingConsumer<>(CAPACITY, MAX_OBJECT_SIZE, builder, filename);
 
         for (int i = 0; i < 4; i++) {
-            producer.nextToDispatch().value = i;
+            writeInt(producer.nextToDispatch(), i);
         }
         producer.flush();
 
@@ -136,10 +143,10 @@ class WaitingRingConsumerTest {
         consumer.fetch();
         consumer.doneFetching();
 
-        NumberMessage extra = producer.nextToDispatch();
+        PayloadMessage extra = producer.nextToDispatch();
         assertNotNull(extra);
-        extra.value = 99;
-        producer.nextToDispatch().value = 100;
+        writeInt(extra, 99);
+        writeInt(producer.nextToDispatch(), 100);
         producer.flush();
 
         assertEquals(4, consumer.availableToFetch());
@@ -147,10 +154,10 @@ class WaitingRingConsumerTest {
 
     @Test
     void testRollback() {
-        consumer = new WaitingRingConsumer<>(16, NumberMessage.getMaxSize(), NumberMessage.class, filename);
+        consumer = new WaitingRingConsumer<>(CAPACITY, MAX_OBJECT_SIZE, builder, filename);
 
         for (int i = 0; i < 5; i++) {
-            producer.nextToDispatch().value = i * 10;
+            writeInt(producer.nextToDispatch(), i * 10);
         }
         producer.flush();
 
@@ -162,16 +169,16 @@ class WaitingRingConsumerTest {
         consumer.rollback(2);
         assertEquals(1, consumer.getLastFetchedSequence());
 
-        NumberMessage m = consumer.fetch();
-        assertEquals(10, m.value);
+        PayloadMessage m = consumer.fetch();
+        assertEquals(10, readInt(m));
     }
 
     @Test
     void testRollbackAll() {
-        consumer = new WaitingRingConsumer<>(16, NumberMessage.getMaxSize(), NumberMessage.class, filename);
+        consumer = new WaitingRingConsumer<>(CAPACITY, MAX_OBJECT_SIZE, builder, filename);
 
         for (int i = 0; i < 3; i++) {
-            producer.nextToDispatch().value = i;
+            writeInt(producer.nextToDispatch(), i);
         }
         producer.flush();
 
@@ -186,9 +193,9 @@ class WaitingRingConsumerTest {
 
     @Test
     void testRollbackInvalidCount() {
-        consumer = new WaitingRingConsumer<>(16, NumberMessage.getMaxSize(), NumberMessage.class, filename);
+        consumer = new WaitingRingConsumer<>(CAPACITY, MAX_OBJECT_SIZE, builder, filename);
 
-        producer.nextToDispatch().value = 1;
+        writeInt(producer.nextToDispatch(), 1);
         producer.flush();
 
         consumer.fetch();
@@ -201,9 +208,9 @@ class WaitingRingConsumerTest {
     void testInferCapacityFromFile() {
         producer.close(false);
 
-        consumer = new WaitingRingConsumer<>(-1, NumberMessage.getMaxSize(), NumberMessage.class, filename);
+        consumer = new WaitingRingConsumer<>(-1, MAX_OBJECT_SIZE, builder, filename);
 
-        assertEquals(16, consumer.getCapacity());
+        assertEquals(CAPACITY, consumer.getCapacity());
     }
 
     @Test
@@ -211,13 +218,13 @@ class WaitingRingConsumerTest {
         String badFile = tempDir.resolve("nonexistent.mmap").toString();
 
         assertThrows(RuntimeException.class, () -> {
-            new WaitingRingConsumer<>(-1, NumberMessage.getMaxSize(), NumberMessage.class, badFile);
+            new WaitingRingConsumer<>(-1, MAX_OBJECT_SIZE, builder, badFile);
         });
     }
 
     @Test
     void testSetLastFetchedSequence() {
-        consumer = new WaitingRingConsumer<>(16, NumberMessage.getMaxSize(), NumberMessage.class, filename);
+        consumer = new WaitingRingConsumer<>(CAPACITY, MAX_OBJECT_SIZE, builder, filename);
 
         consumer.setLastFetchedSequence(10);
         assertEquals(10, consumer.getLastFetchedSequence());
@@ -225,34 +232,49 @@ class WaitingRingConsumerTest {
 
     @Test
     void testBuilderConstructor() {
-        Builder<NumberMessage> builder = Builder.createBuilder(NumberMessage.class);
-        consumer = new WaitingRingConsumer<>(16, NumberMessage.getMaxSize(), builder, filename);
+        Builder<PayloadMessage> customBuilder = payloadBuilder();
+        consumer = new WaitingRingConsumer<>(CAPACITY, MAX_OBJECT_SIZE, customBuilder, filename);
 
-        assertEquals(builder, consumer.getBuilder());
+        assertEquals(customBuilder, consumer.getBuilder());
     }
 
     @Test
     void testNonPowerOfTwoCapacity() {
         String filename2 = tempDir.resolve("nonpow2.mmap").toString();
 
-        WaitingRingProducer<NumberMessage> p = new WaitingRingProducer<>(
-            5, NumberMessage.getMaxSize(), NumberMessage.class, filename2
+        Builder<PayloadMessage> localBuilder = payloadBuilder();
+        WaitingRingProducer<PayloadMessage> p = new WaitingRingProducer<>(
+            5, MAX_OBJECT_SIZE, localBuilder, filename2
         );
-        WaitingRingConsumer<NumberMessage> c = new WaitingRingConsumer<>(
-            5, NumberMessage.getMaxSize(), NumberMessage.class, filename2
+        WaitingRingConsumer<PayloadMessage> c = new WaitingRingConsumer<>(
+            5, MAX_OBJECT_SIZE, localBuilder, filename2
         );
 
         for (int i = 0; i < 5; i++) {
-            p.nextToDispatch().value = i * 100;
+            writeInt(p.nextToDispatch(), i * 100);
         }
         p.flush();
 
         for (int i = 0; i < 5; i++) {
-            NumberMessage m = c.fetch();
-            assertEquals(i * 100, m.value);
+            PayloadMessage m = c.fetch();
+            assertEquals(i * 100, readInt(m));
         }
 
         c.close(false);
         p.close(true);
+    }
+
+    private Builder<PayloadMessage> payloadBuilder() {
+        return () -> new PayloadMessage(MAX_PAYLOAD_SIZE);
+    }
+
+    private void writeInt(PayloadMessage msg, int value) {
+        msg.payload.clear();
+        msg.payload.putInt(value);
+        msg.payloadSize = Integer.BYTES;
+    }
+
+    private int readInt(PayloadMessage msg) {
+        return msg.payload.getInt(0);
     }
 }
