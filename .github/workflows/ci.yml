@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 11
+
+      - name: Go tests (mmap)
+        working-directory: go
+        run: go test ./...
+
+      - name: Go tests (posix shm)
+        working-directory: go
+        env:
+          CGO_ENABLED: 1
+        run: go test -tags posixshm ./...
+
+      - name: Build native library (POSIX shm)
+        working-directory: native
+        run: make
+
+      - name: Maven tests
+        working-directory: java
+        run: mvn -B test
