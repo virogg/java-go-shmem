@@ -192,7 +192,14 @@ public class SharedMemory implements Memory {
         RuntimeException re1 = null;
 
         try {
-            unmmap.invoke(null, address, size);
+            Class<?>[] p = unmmap.getParameterTypes();
+            if (p.length == 2) {
+                unmmap.invoke(null, address, size);
+            } else if (p.length == 1 && p[0] == MappedByteBuffer.class) {
+                unmmap.invoke(null, mappedByteBuffer);
+            } else {
+                throw new IllegalStateException("Unknown unmmap signature: " + unmmap);
+            }
         } catch (Exception e) {
             re1 = new RuntimeException("Cannot release mmap shared memory!", e);
             throw re1;
